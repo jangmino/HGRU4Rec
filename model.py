@@ -110,20 +110,21 @@ class HGRU4Rec:
 
   ########################ACTIVATION FUNCTIONS#########################
   def linear(self, X):
-      return X
+    return X
   def tanh(self, X):
-      return tf.nn.tanh(X)
+    return tf.nn.tanh(X)
   def softmax(self, X):
-      return tf.nn.softmax(X)
+    return tf.nn.softmax(X)
   def softmaxth(self, X):
-      return tf.nn.softmax(tf.tanh(X))
+    return tf.nn.softmax(tf.tanh(X))
   def relu(self, X):
-      return tf.nn.relu(X)
+    return tf.nn.relu(X)
   def sigmoid(self, X):
-      return tf.nn.sigmoid(X)
+    return tf.nn.sigmoid(X)
 
   ############################LOSS FUNCTIONS######################
   def top1(self, yhat):
+    with tf.name_scope("top1"):
       yhatT = tf.transpose(yhat)
       term1 = tf.reduce_mean(tf.nn.sigmoid(-tf.diag_part(yhat)+yhatT)+tf.nn.sigmoid(yhatT**2), axis=0)
       term2 = tf.nn.sigmoid(tf.diag_part(yhat)**2) / self.batch_size
@@ -159,8 +160,8 @@ class HGRU4Rec:
                                         [-1, cell.state_size])
             cur_state_pos += cell.state_size
           o, h = cell(cur_inp, cur_state)
-          h = tf.where(self.hgru4rec.sstart, h, cur_state)
-          h = tf.where(self.hgru4rec.ustart, tf.zeros(tf.shape(h)), h)
+          h = tf.where(self.hgru4rec.sstart, h, cur_state, name='sel_hu_1')
+          h = tf.where(self.hgru4rec.ustart, tf.zeros(tf.shape(h)), h, name='sel_hu_2')
 
           new_states.append(h)
           cur_inp = h
@@ -175,11 +176,11 @@ class HGRU4Rec:
 
     :return:
     """
-    self.X = tf.placeholder(tf.int32, [self.batch_size], name='input')
-    self.Y = tf.placeholder(tf.int32, [self.batch_size], name='output')
-    self.Hs = [tf.placeholder(tf.float32, [self.batch_size, s_size], name='session_state') for s_size in
+    self.X = tf.placeholder(tf.int32, [self.batch_size], name='input_x')
+    self.Y = tf.placeholder(tf.int32, [self.batch_size], name='output_y')
+    self.Hs = [tf.placeholder(tf.float32, [self.batch_size, s_size], name='Hs') for s_size in
                   self.session_layers]
-    self.Hu = [tf.placeholder(tf.float32, [self.batch_size, u_size], name='user_state') for u_size in
+    self.Hu = [tf.placeholder(tf.float32, [self.batch_size, u_size], name='Hu') for u_size in
                   self.user_layers]
     self.sstart = tf.placeholder(tf.bool, [self.batch_size], name='sstart')
     self.ustart = tf.placeholder(tf.bool, [self.batch_size], name='usstart')
@@ -214,33 +215,35 @@ class HGRU4Rec:
       stacked_cell = tf.nn.rnn_cell.MultiRNNCell(cells)
 
       h_s_init = tf.layers.dropout(tf.layers.dense(self.Hu_new[-1], self.session_layers[0]),
-                                   rate=self.dropout_p_init, training=self.is_training)
-      h_s = tf.where(self.sstart, h_s_init, self.Hs[0])
+                                   rate=self.dropout_p_init, training=self.is_training,
+                                   name='h_s_init')
+      h_s = tf.where(self.sstart, h_s_init, self.Hs[0], name='sel_hs_1')
+      h_s = tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s, name='sel_hs_2')
 
-      inputs = tf.nn.embedding_lookup(embedding, self.X, name='input_embedding')
+      inputs = tf.nn.embedding_lookup(embedding, self.X, name='embedding_x')
       output, state = stacked_cell(inputs,
-                                   tuple([tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s, name='my_where')] + self.Hs[1:])
+                                   tuple([h_s] + self.Hs[1:])
                                    )
       self.Hs_new = state
-
-    if self.is_training:
-      '''
-      Use other examples of the minibatch as negative samples.
-      '''
-      sampled_W = tf.nn.embedding_lookup(softmax_W, self.Y)
-      sampled_b = tf.nn.embedding_lookup(softmax_b, self.Y)
-      logits = tf.matmul(output, sampled_W, transpose_b=True) + sampled_b
-      self.yhat = self.final_activation(logits)
-      self.cost = self.loss_function(self.yhat)
-      tf.summary.scalar('loss', self.cost)
-    else:
-      logits = tf.matmul(output, softmax_W, transpose_b=True) + softmax_b
-      self.yhat = self.final_activation(logits)
+      if self.is_training:
+        '''
+        Use other examples of the minibatch as negative samples.
+        '''
+        sampled_W = tf.nn.embedding_lookup(softmax_W, self.Y)
+        sampled_b = tf.nn.embedding_lookup(softmax_b, self.Y)
+        logits = tf.matmul(output, sampled_W, transpose_b=True) + sampled_b
+        self.yhat = self.final_activation(logits)
+        self.cost = self.loss_function(self.yhat)
+        tf.summary.scalar('loss', self.cost)
+      else:
+        logits = tf.matmul(output, softmax_W, transpose_b=True) + softmax_b
+        self.yhat = self.final_activation(logits)
 
     if not self.is_training:
       return
 
-    self.lr = tf.maximum(1e-5,
+    with tf.name_scope("lr_scheduler"):
+      self.lr = tf.maximum(1e-5,
                          tf.train.exponential_decay(self.learning_rate, self.global_step, self.decay_steps, self.decay,
                                                     staircase=True))
 
