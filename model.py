@@ -3,55 +3,28 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.util import nest
 from tensorflow.python.ops import array_ops
 import numpy as np
+import pandas as pd
+from os import path
+import logging
 
-class UserGRUCell4Recxx(tf.nn.rnn_cell.MultiRNNCell):
-  """
-  UserGRU cell for HGRU4Rec
-  """
-
-  def __init__(self, cells, state_is_tuple=True):
-    super(UserGRUCell4Rec, self).__init__(cells, state_is_tuple=state_is_tuple)
-
-  def call(self, inputs, state, sstart, ustart):
-    """Run this multi-layer cell on inputs, starting from state."""
-    cur_state_pos = 0
-    cur_inp = inputs
-    new_states = []
-    for i, cell in enumerate(self._cells):
-      with vs.variable_scope("cell_%d" % i):
-        if self._state_is_tuple:
-          if not nest.is_sequence(state):
-            raise ValueError(
-              "Expected state to be a tuple of length %d, but received: %s" %
-              (len(self.state_size), state))
-          cur_state = state[i]
-        else:
-          cur_state = array_ops.slice(state, [0, cur_state_pos],
-                                      [-1, cell.state_size])
-          cur_state_pos += cell.state_size
-        o, h = cell(cur_inp, cur_state)
-        h = tf.where(self.sstart, h, cur_state)
-        h = tf.where(self.ustart, tf.zeros(tf.shape(h)), h)
-
-        new_states.append(h)
-        cur_inp = h
-
-    new_states = (tuple(new_states) if self._state_is_tuple else
-                  array_ops.concat(new_states, 1))
-
-    return cur_inp, new_states
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s: %(name)s: %(levelname)s: %(message)s")
 
 class HGRU4Rec:
   """
 
   """
-  def __init__(self, session_layers, user_layers, n_epochs=10, batch_size=50, learning_rate=0.05, momentum=0.0,
+  def __init__(self, sess, session_layers, user_layers, n_epochs=100, batch_size=50, learning_rate=0.05, momentum=0.0,
                decay=0.9, grad_cap=0, sigma=0, dropout_p_hidden_usr=0.3,
-               dropout_p_hidden_ses=0.0, dropout_p_init=0.0, init_as_normal=False,
+               dropout_p_hidden_ses=0.3, dropout_p_init=0.3, init_as_normal=False,
                reset_after_session=True, loss='top1', hidden_act='tanh', final_act=None, train_random_order=False,
-               lmbd=0.0, session_key='SessionId', item_key='ItemId', time_key='Time', user_key='UserId', n_sample=0,
+               lmbd=0.0, session_key='session_id', item_key='item_id', time_key='created_at', user_key='user_id', n_sample=0,
                sample_alpha=0.75, user_propagation_mode='init',
-               user_to_output=False, user_to_session_act='tanh'):
+               user_to_output=False, user_to_session_act='tanh', n_items=4, checkpoint_dir='', log_dir=''):
+
+    self.sess = sess
     self.session_layers = session_layers
     self.user_layers = user_layers
     self.n_epochs = n_epochs
@@ -76,6 +49,8 @@ class HGRU4Rec:
     # custom start
     self.is_training = True
     self.decay_steps = 1e4
+    self.n_items = n_items
+    self.log_dir = log_dir
     # custom end
 
     self.user_propagation_mode = user_propagation_mode
@@ -116,6 +91,23 @@ class HGRU4Rec:
     self.n_sample = n_sample
     self.sample_alpha = sample_alpha
 
+    self.checkpoint_dir = checkpoint_dir
+    if not path.isdir(self.checkpoint_dir):
+      raise Exception("[!] Checkpoint Dir not found")
+
+    self.build_model()
+    self.sess.run(tf.global_variables_initializer())
+    self.saver = tf.train.Saver(tf.global_variables(), max_to_keep=10)
+
+    if self.is_training:
+      return
+
+    # # use self.predict_state to hold hidden states during prediction.
+    # self.predict_state = [np.zeros([self.batch_size, self.rnn_size], dtype=np.float32) for _ in xrange(self.layers)]
+    # ckpt = tf.train.get_checkpoint_state(self.checkpoint_dir)
+    # if ckpt and ckpt.model_checkpoint_path:
+    #   self.saver.restore(sess, '{}/gru-model-{}'.format(self.checkpoint_dir, args.test_model))
+
   ########################ACTIVATION FUNCTIONS#########################
   def linear(self, X):
       return X
@@ -149,7 +141,7 @@ class HGRU4Rec:
 
     def call(self, inputs, state):
       """Run this multi-layer cell on inputs, starting from state."""
-      return super(HGRU4Rec.UserGRUCell4Rec, self).call(inputs, state)
+      #return super(HGRU4Rec.UserGRUCell4Rec, self).call(inputs, state)
 
       cur_state_pos = 0
       cur_inp = inputs
@@ -211,8 +203,8 @@ class HGRU4Rec:
         initializer = tf.random_normal_initializer(mean=0, stddev=sigma)
       else:
         initializer = tf.random_uniform_initializer(minval=-sigma, maxval=sigma)
-      embedding = tf.get_variable('embedding', [self.n_items, self.rnn_size], initializer=initializer)
-      softmax_W = tf.get_variable('softmax_w', [self.n_items, self.rnn_size], initializer=initializer)
+      embedding = tf.get_variable('embedding', [self.n_items, self.session_layers[0]], initializer=initializer)
+      softmax_W = tf.get_variable('softmax_w', [self.n_items, self.session_layers[0]], initializer=initializer)
       softmax_b = tf.get_variable('softmax_b', [self.n_items], initializer=tf.constant_initializer(0.0))
 
       cells = []
@@ -224,10 +216,11 @@ class HGRU4Rec:
       h_s_init = tf.layers.dropout(tf.layers.dense(self.Hu_new[-1], self.session_layers[0]),
                                    rate=self.dropout_p_init, training=self.is_training)
       h_s = tf.where(self.sstart, h_s_init, self.Hs[0])
-      self.Hs[0] = tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s) # 이거 안될 거 같은데..
 
-      inputs = tf.nn.embedding_lookup(embedding, self.X)
-      output, state = stacked_cell(inputs, tuple(self.Hs))
+      inputs = tf.nn.embedding_lookup(embedding, self.X, name='input_embedding')
+      output, state = stacked_cell(inputs,
+                                   tuple([tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s, name='my_where')] + self.Hs[1:])
+                                   )
       self.Hs_new = state
 
     if self.is_training:
@@ -239,6 +232,7 @@ class HGRU4Rec:
       logits = tf.matmul(output, sampled_W, transpose_b=True) + sampled_b
       self.yhat = self.final_activation(logits)
       self.cost = self.loss_function(self.yhat)
+      tf.summary.scalar('loss', self.cost)
     else:
       logits = tf.matmul(output, softmax_W, transpose_b=True) + softmax_b
       self.yhat = self.final_activation(logits)
@@ -262,3 +256,134 @@ class HGRU4Rec:
     else:
       capped_gvs = gvs
     self.train_op = optimizer.apply_gradients(capped_gvs, global_step=self.global_step)
+
+    self.merged = tf.summary.merge_all()
+    self.train_writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+
+  def preprocess_data(self, data):
+      # sort by user and time key in order
+      data.sort_values([self.user_key, self.session_key, self.time_key], inplace=True)
+      data.reset_index(drop=True, inplace=True)
+      offset_session = np.r_[0, data.groupby([self.user_key, self.session_key], sort=False).size().cumsum()[:-1]]
+      user_indptr = np.r_[0, data.groupby(self.user_key, sort=False)[self.session_key].nunique().cumsum()[:-1]]
+      return user_indptr, offset_session
+
+  def iterate(self, data, offset_sessions, user_indptr, epoch, reset_state=True):
+    """
+
+    :param data:
+    :param offset_sessions:
+    :param user_indptr:
+    :param reset_state:
+    :return:
+    """
+
+    # variables to manage iterations over users
+    n_users = len(user_indptr)
+    offset_users = offset_sessions[user_indptr]
+    user_idx_arr = np.arange(n_users - 1)
+    user_iters = np.arange(self.batch_size)
+    user_maxiter = user_iters.max()
+    user_start = offset_users[user_idx_arr[user_iters]]
+    user_end = offset_users[user_idx_arr[user_iters] + 1]
+
+    # variables to manage iterations over sessions
+    session_iters = user_indptr[user_iters]
+    session_start = offset_sessions[session_iters]
+    session_end = offset_sessions[session_iters + 1]
+
+    sstart = np.zeros((self.batch_size,), dtype=np.bool)
+    ustart = np.zeros((self.batch_size,), dtype=np.bool)
+    finished = False
+    n = 0
+    c = []
+    summary = None
+
+    Hs_new = [np.zeros([self.batch_size, s_size], dtype=np.float32) for s_size in self.session_layers]
+    Hu_new = [np.zeros([self.batch_size, u_size], dtype=np.float32) for u_size in self.user_layers]
+    while not finished:
+      session_minlen = (session_end - session_start).min()
+      out_idx = data.ItemIdx.values[session_start]
+      for i in range(session_minlen - 1):
+        in_idx = out_idx
+        out_idx = data.ItemIdx.values[session_start + i + 1]
+        #if self.n_sample:
+          #   sample = self.neg_sampler.next_sample()
+          #   y = np.hstack([out_idx, sample])
+          # else:
+        y = out_idx
+
+        feed_dict = {self.X: in_idx, self.Y: y, self.sstart: sstart, self.ustart: ustart}
+        for j in range(len(self.Hs)):
+          feed_dict[self.Hs[j]] = Hs_new[j]
+        for j in range(len(self.Hu)):
+          feed_dict[self.Hu[j]] = Hu_new[j]
+
+        fetches = [self.merged, self.cost, self.Hs_new, self.Hu_new, self.global_step, self.lr, self.train_op]
+        summary, cost, Hs_new, Hu_new, step, lr, _ = self.sess.run(fetches, feed_dict)
+
+        n += 1
+        # reset sstart and ustart
+        sstart = np.zeros_like(sstart, dtype=np.bool)
+        ustart = np.zeros_like(ustart, dtype=np.bool)
+        c.append(cost)
+        if np.isnan(cost):
+          logger.error('NaN error!')
+          self.error_during_train = True
+          return
+      session_start = session_start + session_minlen - 1
+      session_start_mask = np.arange(len(session_iters))[(session_end - session_start) <= 1]
+      sstart[session_start_mask] = True
+      for idx in session_start_mask:
+        session_iters[idx] += 1
+        if session_iters[idx] + 1 >= len(offset_sessions):
+          finished = True
+          break
+        session_start[idx] = offset_sessions[session_iters[idx]]
+        session_end[idx] = offset_sessions[session_iters[idx] + 1]
+
+      # reset the User hidden state at user change
+      user_change_mask = np.arange(len(user_iters))[(user_end - session_start <= 0)]
+      ustart[user_change_mask] = True
+      for idx in user_change_mask:
+        user_maxiter += 1
+        if user_maxiter + 1 >= len(offset_users):
+          finished = True
+          break
+        user_iters[idx] = user_maxiter
+        user_start[idx] = offset_users[user_maxiter]
+        user_end[idx] = offset_users[user_maxiter + 1]
+        session_iters[idx] = user_indptr[user_maxiter]
+        session_start[idx] = offset_sessions[session_iters[idx]]
+        session_end[idx] = offset_sessions[session_iters[idx] + 1]
+    avgc = np.mean(c)
+
+    self.train_writer.add_summary(summary, epoch)
+
+    return avgc
+
+  def fit(self, train_data, valid_data=None, patience=3):
+    """
+    :param train_data:
+    :param valid_data:
+    :return:
+    """
+    self.error_during_train = False
+
+    itemids = train_data[self.item_key].unique()
+    self.itemidmap = pd.Series(data=np.arange(self.n_items), index=itemids)
+    train_data = pd.merge(train_data,
+                          pd.DataFrame({self.item_key: itemids, 'ItemIdx': self.itemidmap[itemids].values}),
+                          on=self.item_key, how='inner')
+    user_indptr, offset_sessions = self.preprocess_data(train_data)
+
+    epoch = 0
+    my_patience = patience
+    while epoch < self.n_epochs and my_patience > 0:
+      avgc = self.iterate(train_data, offset_sessions, user_indptr, epoch)
+      print('cost is...{}/{}'.format(epoch, avgc))
+      epoch += 1
+      if np.isnan(avgc):
+        print('Epoch {}: Nan error!'.format(epoch, avgc))
+        return
+      self.saver.save(self.sess, '{}/gru-model'.format(self.checkpoint_dir), global_step=epoch)
