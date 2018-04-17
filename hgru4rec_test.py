@@ -17,11 +17,14 @@ class HGRU4RecTest(tf.test.TestCase):
     print('setup is called')
 
 
-  def testCustomCell(self):
-    cell = tf.nn.rnn_cell.GRUCell(10, 10)
-    m = model.UserGRUCell4Rec([cell] * 5)
-    return True
+  # def testCustomCell(self):
+  #   cell = tf.nn.rnn_cell.GRUCell(10, 10)
+  #   m = model.UserGRUCell4Rec([cell] * 5)
+  #   return True
 
+  def testBuildModel(self):
+    hgru4rec = model.HGRU4Rec([10], [10], batch_size=2)
+    hgru4rec.build_model()
 
 if __name__ == "__main__":
   tf.test.main()
