@@ -16,8 +16,8 @@ class HGRU4Rec:
   """
 
   """
-  def __init__(self, sess, session_layers, user_layers, n_epochs=100, batch_size=50, learning_rate=0.05, momentum=0.0,
-               decay=0.9, grad_cap=0, sigma=0, dropout_p_hidden_usr=0.3,
+  def __init__(self, sess, session_layers, user_layers, n_epochs=50, batch_size=50, learning_rate=0.001, momentum=0.0,
+               decay=0.96, grad_cap=0, sigma=0, dropout_p_hidden_usr=0.3,
                dropout_p_hidden_ses=0.3, dropout_p_init=0.3, init_as_normal=False,
                reset_after_session=True, loss='top1', hidden_act='tanh', final_act=None, train_random_order=False,
                lmbd=0.0, session_key='session_id', item_key='item_id', time_key='created_at', user_key='user_id', n_sample=0,
@@ -220,6 +220,7 @@ class HGRU4Rec:
       h_s = tf.where(self.sstart, h_s_init, self.Hs[0], name='sel_hs_1')
       h_s = tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s, name='sel_hs_2')
 
+
       inputs = tf.nn.embedding_lookup(embedding, self.X, name='embedding_x')
       output, state = stacked_cell(inputs,
                                    tuple([h_s] + self.Hs[1:])
@@ -234,7 +235,7 @@ class HGRU4Rec:
         logits = tf.matmul(output, sampled_W, transpose_b=True) + sampled_b
         self.yhat = self.final_activation(logits)
         self.cost = self.loss_function(self.yhat)
-        tf.summary.scalar('loss', self.cost)
+        tf.summary.scalar('cost', self.cost)
       else:
         logits = tf.matmul(output, softmax_W, transpose_b=True) + softmax_b
         self.yhat = self.final_activation(logits)
@@ -242,23 +243,23 @@ class HGRU4Rec:
     if not self.is_training:
       return
 
-    with tf.name_scope("lr_scheduler"):
+    with tf.name_scope("optimizer"):
       self.lr = tf.maximum(1e-5,
                          tf.train.exponential_decay(self.learning_rate, self.global_step, self.decay_steps, self.decay,
                                                     staircase=True))
+      '''
+      Try different optimizers.
+      '''
+      tf.summary.scalar('lr', self.lr)
+      optimizer = tf.train.AdamOptimizer(self.lr)
 
-    '''
-    Try different optimizers.
-    '''
-    optimizer = tf.train.AdamOptimizer(self.lr)
-
-    tvars = tf.trainable_variables()
-    gvs = optimizer.compute_gradients(self.cost, tvars)
-    if self.grad_cap > 0:
-      capped_gvs = [(tf.clip_by_norm(grad, self.grad_cap), var) for grad, var in gvs]
-    else:
-      capped_gvs = gvs
-    self.train_op = optimizer.apply_gradients(capped_gvs, global_step=self.global_step)
+      tvars = tf.trainable_variables()
+      gvs = optimizer.compute_gradients(self.cost, tvars)
+      if self.grad_cap > 0:
+        capped_gvs = [(tf.clip_by_norm(grad, self.grad_cap), var) for grad, var in gvs]
+      else:
+        capped_gvs = gvs
+      self.train_op = optimizer.apply_gradients(capped_gvs, global_step=self.global_step)
 
     self.merged = tf.summary.merge_all()
     self.train_writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
@@ -271,7 +272,7 @@ class HGRU4Rec:
       user_indptr = np.r_[0, data.groupby(self.user_key, sort=False)[self.session_key].nunique().cumsum()[:-1]]
       return user_indptr, offset_session
 
-  def iterate(self, data, offset_sessions, user_indptr, epoch, reset_state=True):
+  def iterate(self, data, offset_sessions, user_indptr, reset_state=True):
     """
 
     :param data:
@@ -326,6 +327,7 @@ class HGRU4Rec:
         summary, cost, Hs_new, Hu_new, step, lr, _ = self.sess.run(fetches, feed_dict)
 
         n += 1
+        self.train_writer.add_summary(summary, step)
         # reset sstart and ustart
         sstart = np.zeros_like(sstart, dtype=np.bool)
         ustart = np.zeros_like(ustart, dtype=np.bool)
@@ -361,8 +363,6 @@ class HGRU4Rec:
         session_end[idx] = offset_sessions[session_iters[idx] + 1]
     avgc = np.mean(c)
 
-    self.train_writer.add_summary(summary, epoch)
-
     return avgc
 
   def fit(self, train_data, valid_data=None, patience=3):
@@ -381,12 +381,14 @@ class HGRU4Rec:
     user_indptr, offset_sessions = self.preprocess_data(train_data)
 
     epoch = 0
+    total_n = 0
     my_patience = patience
     while epoch < self.n_epochs and my_patience > 0:
-      avgc = self.iterate(train_data, offset_sessions, user_indptr, epoch)
-      print('cost is...{}/{}'.format(epoch, avgc))
+      avgc = self.iterate(train_data, offset_sessions, user_indptr, total_n)
+      print('cost is...{}: {}'.format(epoch, avgc))
       epoch += 1
       if np.isnan(avgc):
         print('Epoch {}: Nan error!'.format(epoch, avgc))
         return
-      self.saver.save(self.sess, '{}/gru-model'.format(self.checkpoint_dir), global_step=epoch)
+      # temporarily disabled.
+      #self.saver.save(self.sess, '{}/gru-model'.format(self.checkpoint_dir), global_step=epoch)
