@@ -264,7 +264,7 @@ class HGRU4Rec:
       self.train_op = optimizer.apply_gradients(capped_gvs, global_step=self.global_step)
 
     self.merged = tf.summary.merge_all()
-    self.train_writer = tf.summary.FileWriter(self.log_dir, self.sess.graph)
+    self.train_writer = tf.summary.FileWriter(path.join(self.log_dir, 'train'), self.sess.graph)
 
   def preprocess_data(self, data):
       # sort by user and time key in order
@@ -274,7 +274,7 @@ class HGRU4Rec:
       user_indptr = np.r_[0, data.groupby(self.user_key, sort=False)[self.session_key].nunique().cumsum()[:-1]]
       return user_indptr, offset_session
 
-  def iterate(self, data, offset_sessions, user_indptr, reset_state=True):
+  def iterate(self, data, offset_sessions, user_indptr, reset_state=True, is_validation=False):
     """
 
     :param data:
@@ -325,11 +325,17 @@ class HGRU4Rec:
         for j in range(len(self.Hu)):
           feed_dict[self.Hu[j]] = Hu_new[j]
 
-        fetches = [self.merged, self.cost, self.Hs_new, self.Hu_new, self.global_step, self.lr, self.train_op]
+        fetches = []
+        if is_validation == False:
+          fetches = [self.merged, self.cost, self.Hs_new, self.Hu_new, self.global_step, self.lr, self.train_op]
+        else:
+          fetches = [self.merged, self.cost, self.Hs_new, self.Hu_new]
         summary, cost, Hs_new, Hu_new, step, lr, _ = self.sess.run(fetches, feed_dict)
 
         n += 1
-        self.train_writer.add_summary(summary, step)
+
+        if is_validation == False:
+          self.train_writer.add_summary(summary, step)
         # reset sstart and ustart
         sstart = np.zeros_like(sstart, dtype=np.bool)
         ustart = np.zeros_like(ustart, dtype=np.bool)
@@ -382,15 +388,32 @@ class HGRU4Rec:
                           on=self.item_key, how='inner')
     user_indptr, offset_sessions = self.preprocess_data(train_data)
 
+    user_indptr_valid, offset_sessions_valid = None, None
+    if valid_data is not None:
+      valid_data = pd.merge(valid_data,
+                            pd.DataFrame({self.item_key: itemids, 'ItemIdx': self.itemidmap[itemids].values}),
+                            on=self.item_key, how='inner')
+      user_indptr_valid, offset_sessions_valid = self.preprocess_data(valid_data)
+
     epoch = 0
-    total_n = 0
+    best_valid = None
     my_patience = patience
     while epoch < self.n_epochs and my_patience > 0:
-      avgc = self.iterate(train_data, offset_sessions, user_indptr, total_n)
-      print('cost is...{}: {}'.format(epoch, avgc))
-      epoch += 1
-      if np.isnan(avgc):
-        print('Epoch {}: Nan error!'.format(epoch, avgc))
+      train_cost = self.iterate(train_data, offset_sessions, user_indptr)
+      if np.isnan(train_cost):
+        print('Epoch {}: Nan error!'.format(epoch, train_cost))
         return
-      # temporarily disabled.
-      #self.saver.save(self.sess, '{}/gru-model'.format(self.checkpoint_dir), global_step=epoch)
+
+      if valid_data is not None:
+        valid_cost = self.iterate(valid_data, offset_sessions_valid, user_indptr_valid)
+        if best_valid is None or valid_cost < best_valid:
+          best_valid = valid_cost
+        logger.info(
+          'Epoch {} - train cost: {:.4f} - valid cost: {:.4f}'.format(epoch, train_cost, valid_cost, my_patience)
+        )
+      else:
+        logger.info('Epoch {} -train cost: {:.4f}'.format(epoch, train_cost))
+
+      epoch += 1
+
+      #self.saver.save(self.sess, '{}/hgru-model'.format(self.checkpoint_dir), global_step=epoch)

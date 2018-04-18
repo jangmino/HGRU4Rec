@@ -26,6 +26,7 @@ class HGRU4RecTest(tf.test.TestCase):
 
   def testBuildModel(self):
     train_data = pd.read_hdf(r'.\data\retail_rocket.hdf', 'train')
+    valid_data = pd.read_hdf(r'.\data\retail_rocket.hdf', 'valid_train')
     itemids = train_data['itemid'].unique()
     n_items = len(itemids)
     gpu_config = tf.ConfigProto()
@@ -39,7 +40,7 @@ class HGRU4RecTest(tf.test.TestCase):
                                 time_key='timestamp',
                                 user_key='visitorid'
                                 )
-      hgru4rec.fit(train_data)
+      hgru4rec.fit(train_data, valid_data)
 
   # def testBuildModel(self):
   #   # train_data = pd.read_hdf(r'c:\Users\wmp\theano\hgru4rec\data\xing\dense\last-session-out\sessions.hdf', 'whole_data')
