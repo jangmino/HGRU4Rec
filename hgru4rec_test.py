@@ -25,15 +25,19 @@ class HGRU4RecTest(tf.test.TestCase):
   #   return True
 
   def testBuildModel(self):
-    train_data = pd.read_hdf(r'.\data\sessions.hdf', 'whole_data')
-    itemids = train_data['item_id'].unique()
+    train_data = pd.read_hdf(r'.\data\retail_rocket.hdf', 'train')
+    itemids = train_data['itemid'].unique()
     n_items = len(itemids)
     gpu_config = tf.ConfigProto()
     gpu_config.gpu_options.allow_growth = True
     with tf.Session(config=gpu_config) as sess:
-      hgru4rec = model.HGRU4Rec(sess, [50], [50], batch_size=2, n_items=n_items, n_epochs=10,
+      hgru4rec = model.HGRU4Rec(sess, [100], [100], batch_size=50, n_items=n_items, n_epochs=30,
                                 checkpoint_dir=r'.\model',
-                                log_dir=r'.\log'
+                                log_dir=r'.\log',
+                                session_key='session_id',
+                                item_key='itemid',
+                                time_key='timestamp',
+                                user_key='visitorid'
                                 )
       hgru4rec.fit(train_data)
 
