@@ -214,16 +214,18 @@ class HGRU4Rec:
         cells.append(tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.dropout_p_hidden_ses))
       stacked_cell = tf.nn.rnn_cell.MultiRNNCell(cells)
 
-      h_s_init = tf.layers.dropout(tf.layers.dense(self.Hu_new[-1], self.session_layers[0]),
+      input_states=[]
+      for j in range(len(self.session_layers)):
+        h_s_init = tf.layers.dropout(tf.layers.dense(self.Hu_new[-1], self.session_layers[j]),
                                    rate=self.dropout_p_init, training=self.is_training,
-                                   name='h_s_init')
-      h_s = tf.where(self.sstart, h_s_init, self.Hs[0], name='sel_hs_1')
-      h_s = tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s, name='sel_hs_2')
-
+                                   name='h_s_init_{}'.format(j))
+        h_s = tf.where(self.sstart, h_s_init, self.Hs[j], name='sel_hs_1_{}'.format(j))
+        h_s = tf.where(self.ustart, tf.zeros(tf.shape(h_s)), h_s, name='sel_hs_2_{}'.format(j))
+        input_states.append(h_s)
 
       inputs = tf.nn.embedding_lookup(embedding, self.X, name='embedding_x')
       output, state = stacked_cell(inputs,
-                                   tuple([h_s] + self.Hs[1:])
+                                   tuple(input_states)
                                    )
       self.Hs_new = state
       if self.is_training:
