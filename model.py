@@ -16,11 +16,11 @@ class HGRU4Rec:
   """
 
   """
-  def __init__(self, sess, session_layers, user_layers, n_epochs=50, batch_size=50, learning_rate=0.001, momentum=0.0,
+  def __init__(self, sess, session_layers, user_layers, n_epochs=10, batch_size=50, learning_rate=0.001,
                decay=0.96, grad_cap=0, sigma=0, dropout_p_hidden_usr=0.3,
                dropout_p_hidden_ses=0.3, dropout_p_init=0.3, init_as_normal=False,
-               reset_after_session=True, loss='top1', hidden_act='tanh', final_act=None, train_random_order=False,
-               lmbd=0.0, session_key='session_id', item_key='item_id', time_key='created_at', user_key='user_id', n_sample=0,
+               reset_after_session=True, loss='top1', hidden_act='tanh', final_act=None,
+               session_key='session_id', item_key='item_id', time_key='created_at', user_key='user_id', n_sample=0,
                sample_alpha=0.75, user_propagation_mode='init',
                user_to_output=False, user_to_session_act='tanh', n_items=4, checkpoint_dir='', log_dir=''):
 
@@ -34,7 +34,6 @@ class HGRU4Rec:
     self.dropout_p_init = dropout_p_init
     self.learning_rate = learning_rate
     self.decay = decay
-    self.momentum = momentum
     self.sigma = sigma
     self.init_as_normal = init_as_normal
     self.reset_after_session = reset_after_session
@@ -43,8 +42,6 @@ class HGRU4Rec:
     self.time_key = time_key
     self.user_key = user_key
     self.grad_cap = grad_cap
-    self.train_random_order = train_random_order
-    self.lmbd = lmbd
 
     # custom start
     self.is_training = True
@@ -216,7 +213,7 @@ class HGRU4Rec:
 
       input_states=[]
       for j in range(len(self.session_layers)):
-        h_s_init = tf.layers.dropout(tf.layers.dense(self.Hu_new[-1], self.session_layers[j]),
+        h_s_init = tf.layers.dropout(self.s_init_act(tf.layers.dense(self.Hu_new[-1], self.session_layers[j])),
                                    rate=self.dropout_p_init, training=self.is_training,
                                    name='h_s_init_{}'.format(j))
         h_s = tf.where(self.sstart, h_s_init, self.Hs[j], name='sel_hs_1_{}'.format(j))
@@ -373,7 +370,7 @@ class HGRU4Rec:
 
     return avgc
 
-  def fit(self, train_data, valid_data=None, patience=3):
+  def fit(self, train_data, valid_data=None, patience=3, margin=1.003):
     """
     :param train_data:
     :param valid_data:
@@ -398,7 +395,7 @@ class HGRU4Rec:
     epoch = 0
     best_valid = None
     my_patience = patience
-    while epoch < self.n_epochs and my_patience > 0:
+    while epoch < self.n_epochs and my_patience > 0 and my_patience > 0:
       train_cost = self.iterate(train_data, offset_sessions, user_indptr)
       if np.isnan(train_cost):
         print('Epoch {}: Nan error!'.format(epoch, train_cost))
@@ -408,6 +405,9 @@ class HGRU4Rec:
         valid_cost = self.iterate(valid_data, offset_sessions_valid, user_indptr_valid)
         if best_valid is None or valid_cost < best_valid:
           best_valid = valid_cost
+          my_patience = patience
+        elif valid_cost >= best_valid * margin:
+          my_patience -= 1
         logger.info(
           'Epoch {} - train cost: {:.4f} - valid cost: {:.4f}'.format(epoch, train_cost, valid_cost, my_patience)
         )
@@ -416,4 +416,5 @@ class HGRU4Rec:
 
       epoch += 1
 
+      # temporarily commented
       #self.saver.save(self.sess, '{}/hgru-model'.format(self.checkpoint_dir), global_step=epoch)

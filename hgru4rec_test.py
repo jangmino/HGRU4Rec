@@ -32,7 +32,7 @@ class HGRU4RecTest(tf.test.TestCase):
     gpu_config = tf.ConfigProto()
     gpu_config.gpu_options.allow_growth = True
     with tf.Session(config=gpu_config) as sess:
-      hgru4rec = model.HGRU4Rec(sess, [100], [100], batch_size=50, n_items=n_items, n_epochs=30,
+      hgru4rec = model.HGRU4Rec(sess, [100], [100], batch_size=50, n_items=n_items, n_epochs=50,
                                 checkpoint_dir=r'.\model',
                                 log_dir=r'.\log',
                                 session_key='session_id',
