@@ -21,11 +21,11 @@ Please refer inner class `class UserGRUCell4Rec(tf.nn.rnn_cell.MultiRNNCell)`:
 - It is subclassing `MultiRNNCell` which is for GRU_user. You can find my main TF conversion in the overriding `call()`.
 
 A difference with the author's implementation:
-- Within `tf.variable_scope('session_gru')`, we extend the initialization mechanism for `input_states` for whole layered cells.
+- Within `tf.variable_scope('session_gru')`, I extend the initialization mechanism for `input_states` for whole layered cells.
 - Original version does the initialization on the first layer onley.
 
 # Note
 
-Currently XING data used in the original paper is not available. Therefore, I make a verifying data set from https://www.kaggle.com/retailrocket/ecommerce-dataset.
+Currently XING data used in the original paper is not available. Therefore, I made a verifying data set from https://www.kaggle.com/retailrocket/ecommerce-dataset.
 
-You can refer `build_dataset.py` from `data/xing` under https://github.com/mquad/hgru4rec. 
+You can refer `build_dataset.py` from `data/xing` under https://github.com/mquad/hgru4rec to make your dataset.
