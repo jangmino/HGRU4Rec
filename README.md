@@ -24,6 +24,10 @@ A difference with the author's implementation:
 - Within `tf.variable_scope('session_gru')`, I extend the initialization mechanism for `input_states` for whole layered cells.
 - Original version does the initialization on the first layer onley.
 
+## Usage
+
+`python train_hgru4rec.py 100 100 --hdf_path=./data/retail_rocket.hdf --early_stopping`
+
 # Note
 
 Currently XING data used in the original paper is not available. Therefore, I made a verifying data set from https://www.kaggle.com/retailrocket/ecommerce-dataset.
