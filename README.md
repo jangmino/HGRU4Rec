@@ -18,7 +18,7 @@ tables>= 3.4.2
 # Main points
 Please refer inner class `class UserGRUCell4Rec(tf.nn.rnn_cell.MultiRNNCell)`:
 
-- It is subclassing `MultiRNNCell` which is for GRU_user. You can find my main TF conversion in the overriding `call()`.
+- It is subclassing `MultiRNNCell` which is for GRU_user. You can find my main TF conversion of overriding `call()`.
 
 A difference with the author's implementation:
 - Within `tf.variable_scope('session_gru')`, I extend the initialization mechanism for `input_states` for whole layered cells.
